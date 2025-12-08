@@ -1,0 +1,697 @@
+---
+title: "2024_12_04_latest_paper_draft"
+author: Alejandra Quinones
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(pcvr)
+library(ggpubr)
+library(scales)
+library(pcvr)
+library(tidygraph)
+library(ggraph)
+library(geomtextpath)
+library(corrplot)
+library(gridGraphics)
+library(grid)
+library(multcompView)
+library(corrr)
+library(ggridges)
+library(ppclust)
+library(ggalluvial)
+
+resp_traits = c("area_cm2", "height_above_reference_cm", 
+                          "hue_circular_mean_degrees", "pWUE")
+short_names_traits = c("area_cm2"="Plant area (cm²)","height_above_reference_cm"="Height (cm)", 
+                          "hue_circular_mean_degrees"="Plant mean hue (°)", "pWUE"="pWUE")
+
+treat_cols = c("Control"="#7CAE00", "Drought"="#00BFC4","Heat"="#F8766D", "Drought_Heat"="#C77CFF")
+treat_fullname = c("Control"="Control","Drought"="Drought","Drought_Heat"="Drought & Heat", "Heat"="Heat")
+treat_short = c("C"="Control","D"="Drought","DH"="Drought_Heat", "H"="Heat")
+
+df_full = read.csv("/Users/quino070/Bellwether_RGB/2024_12_draft/2024_12_04_full_df.csv") 
+```
+
+
+1. Treatments affected plant size, color, and development
+
+```{r, fig.width=15, fig.height=15}
+for_varcomps = df_full %>% filter(day==13) %>% select(-c(leaf_count, pWUE, area_pixels, center_of_mass.y_converted, 
+             height_above_reference_pixels))
+
+traits_ = colnames(for_varcomps[,-c(1:6)])
+  
+traits =   data.frame(ps=colnames(for_varcomps) %>% .[-c(1:6)]) %>% mutate(
+  p=str_replace_all(ps, "_", " ") %>%
+    str_replace(., " pixels", "") %>%
+    str_replace(., " none", "") %>% str_replace(., " degrees", "") %>%
+    str_replace(., " cm2","") %>% str_replace(., " cm", "") %>%
+    str_replace(., "[.]", " ") %>%
+    ifelse(.!="pWUE", str_to_sentence(.), .)) %>% deframe()
+
+#colnames(for_varcomps)[7:ncol(for_varcomps)] = traits[colnames(for_varcomps)[7:ncol(for_varcomps)] ]
+
+
+
+vc = pcvr::frem(for_varcomps, des=c("treatment","genotype_name"), 
+                phenotypes=traits_, returnData = T) %>% .$data
+
+comps = c("Unexplained"="Residual", "Interaction"="Genotype x Treatment", 
+          "genotype_name"="Genotype", "treatment"="Treatment")
+
+ord_traits = vc$variance %>% mutate(Phenotypes=as.character(Phenotypes) %>% traits[.]) %>% 
+  pivot_longer(cols=1:4, names_to = "Component") %>% 
+  mutate(Component=factor(comps[Component], comps)) %>% 
+  filter(Component == "Treatment") %>% arrange(value) %>% .$Phenotypes
+
+
+var_cor = ggarrange(
+
+vc$variance %>% mutate(Phenotypes=as.character(Phenotypes) %>% traits[.]) %>% 
+  pivot_longer(cols=1:4, names_to = "Component") %>% 
+  mutate(Component=factor(comps[Component], comps)) %>% 
+  ggplot(aes(value, fct_relevel(Phenotypes, ord_traits), fill=Component)) + 
+  geom_bar(stat="identity") +
+  scale_fill_viridis_d() + 
+  scale_x_continuous(labels = scales::percent, expand=c(0.1,0)) +
+  scale_y_discrete(expand=c(0,0)) + 
+  theme_classic() + theme(axis.line = element_blank(), 
+                          axis.ticks.y = element_blank(),
+                          legend.position = "bottom",
+                          axis.text.y=element_blank(),
+                          axis.title.x=element_text(size=15),
+                          plot.margin = unit(c(6,0.5,0.65,0.25),"cm")) + 
+  labs(x="Variance explained", y=NULL) 
+,
+
+vc$cor %>% mutate_at(c("Var2", "Var1"), ~{as.character(.x) %>% traits[.] 
+  }) %>%
+  mutate(Var1=factor(Var1, ord_traits), Var2=factor(Var2, rev(ord_traits))) %>% 
+  ggplot(aes(Var2, Var1, fill=value)) + geom_point(shape=21, size=10, stroke=0) + 
+  theme_pubr() + scale_fill_distiller(palette = "RdBu", direction = +1) + 
+  theme(axis.line = element_blank(), axis.ticks=element_blank(), 
+        axis.text.x=element_text(angle=45, hjust=0, size=15), 
+        legend.position = "bottom", plot.margin = unit(c(0.25,10,0.6,0),"lines"),
+        legend.title.position = "top", 
+        legend.title = element_text(hjust=0.5, face="italic"),
+        axis.text.y = element_text(size=15, hjust=0.5)
+        ) + scale_x_discrete(position="top", expand=c(0.1,0)) + labs(fill="r", x=NULL, y=NULL)
+
+, widths = c(0.5,1), heights = c(1,0.8)
+
+)
+
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/var_comps.pdf", width = 20)
+```
+
+```{r, fig.height=20}
+
+treat_dayBU = imap(1:13, ~{
+  temp_vc = df_full %>% filter(day==.x) %>% select(-c(leaf_count, pWUE, area_pixels, center_of_mass.y_converted, 
+             height_above_reference_pixels))
+
+  pcvr::frem(temp_vc, des=c("treatment","genotype_name"), 
+                phenotypes=traits_, returnData = T, cor = F) %>% .$data %>% 
+    mutate(Phenotypes=as.character(Phenotypes) %>% traits[.]) %>% 
+  pivot_longer(cols=1:4, names_to = "Component") %>% 
+  mutate(Component=factor(comps[Component], comps), day=.x) 
+    
+}) %>% do.call("rbind",.) 
+
+
+treat_day = treat_dayBU %>% filter(Component=="Treatment") %>% 
+  ggplot(aes(as.factor(day), fct_relevel(Phenotypes,ord_traits), fill=value)) + geom_tile() + 
+  theme_pubclean() + scale_fill_viridis_c(name="Variance explained\n      by treatment", 
+                                           labels=scales::percent, 
+                                          option = "F", direction = -1) +
+  labs(x="Day of experiment", y=NULL) + scale_x_discrete(position = "top") + 
+  theme(legend.position = "bottom", legend.key.width = unit(1.5, "cm"))
+
+
+
+
+ggarrange(var_cor, ggplot() + theme_void(), ggarrange(treat_day, ggplot() + theme_void(), 
+                             widths=c(0.3,0.6)), ncol=1, heights = c(1,0.05,0.5))
+
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/var_comps.png", width=20, height = 20)
+```
+
+
+Calculating %similarity in general trends
+```{r, fig.height=12}
+
+# long = df_full %>% dplyr::select(1:6, resp_traits[-4]) %>%
+# pivot_longer(cols = resp_traits[-4], names_to = "trait")
+
+long = df_full %>% dplyr::select(1:6, resp_traits) %>%
+pivot_longer(cols = resp_traits, names_to = "trait")
+
+gen_trend = 
+  #general trends dataset
+  left_join(
+  long %>% group_by(treatment, day, trait)  %>% 
+  summarize(mean_t=mean(value, na.rm = T), 
+            sd = sd(value, na.rm=T),
+            min=mean_t - 1.96*(sd/sqrt(47)) , max=mean_t + 1.96*(sd/sqrt(47))) %>% 
+  ungroup(),
+  #stat test to get first instance of significant change from control
+  imap(resp_traits, ~{
+    t=.x
+    days = if(.x == "pWUE"){
+      2:13}
+    else 1:13
+    imap(days, ~{
+      aov(value ~ treatment + genotype_name + treatment:genotype_name, data = long %>% filter(trait == t & day==.x)) %>% 
+        TukeyHSD() %>% .$treatment %>% data.frame() %>% 
+        rownames_to_column("n") %>% rowwise() %>% 
+        mutate(trait=t, day=.x,
+               treatment=str_split(n, "-") %>% .[[1]] %>% .[1],
+               treatment2=str_split(n, "-") %>% .[[1]] %>% .[2]) %>% ungroup() %>% 
+        filter(treatment2=="Control") %>% select(treatment, day, trait,2:6)
+      }) %>% do.call("rbind",.) 
+    })  %>%  do.call("rbind",.) %>% mutate(sig=ifelse(p.adj<0.05, "*", NA))
+  )
+```
+
+
+```{r}
+gen_trend = gen_trend %>% left_join(., 
+
+gen_trend %>% group_by(trait) %>% 
+  mutate(terminal_C = mean_t[treatment=="Control" & day==13],
+         similarity=mean_t/terminal_C,
+         sim_max = max/max[treatment=="Control" & day==13],
+         sim_max = min/min[treatment=="Control" & day==13]
+         
+         ) %>% 
+  filter(day==13 & treatment!="Control") 
+) #%>% filter(trait %in% c("area_cm2", "height_above_reference_cm")) 
+
+```
+
+```{r, fig.height=10, fig.width=10}
+gt_plots = imap(c("area_cm2", "height_above_reference_cm", "hue_circular_mean_degrees","pWUE"), ~{
+  gen_trend %>% filter(trait==.x) %>% 
+    ggplot() + 
+  geom_line(aes(day, mean_t, group=treatment, color=treatment)
+            #, linewidth=2
+            ) + 
+  geom_ribbon(aes(day, mean_t, group=treatment, ymax=max, ymin=min,fill=treatment), alpha=0.25) + 
+  geom_point(data= gen_trend %>% filter(trait==.x & sig=="*"), 
+             aes(day, mean_t, group=treatment, color=treatment)
+             #, size=10
+             ) + 
+  labs(y=NULL, fill="Treatment", color="Treatment", x="Days of treatment") +
+  
+  geom_pointrange(data= gen_trend %>% filter(trait==.x & day==13 & treatment!="Control") %>% 
+                    mutate(day=
+                             #c(13.25, 13.5, rep(13,2), 13.5, 13.25)
+                           ifelse(trait %in% c("area_cm2", "hue_circular_mean_degrees"), c(13.25, 13.50, 13.00),
+                                  ifelse(trait=="pWUE",c(13.50,13.25,13.00),c(13.00, 13.50, 13.25)))
+                             ), 
+                  aes(day, mean_t, ymax=mean_t, ymin=-Inf,color=treatment), 
+                  #size=5, 
+                  shape=17, 
+                  #linewidth=3, 
+                  show.legend = F) +
+  scale_fill_manual(values=treat_cols, labels=treat_fullname) + 
+  scale_color_manual(values=treat_cols, labels=treat_fullname) +
+  
+  geom_text(data=. %>% filter(trait==.x & day==13 & treatment!="Control") %>% 
+              mutate(day=
+                       # c(13.25, 13.5, rep(13,2), 13.5, 13.25)
+                       ifelse(trait %in% c("area_cm2", "hue_circular_mean_degrees"), c(13.25, 13.50, 13.00)+0.25,
+                                  ifelse(trait=="pWUE",c(14,13.5,13.25),c(13.00, 13.50, 13.25)+0.25))
+                       #rep(14.5,3)
+                     
+                     ), 
+            aes(day, label=round(similarity*100,0) %>% paste0(.,"%"),
+                y=mean_t, color=treatment), #size=20, #fontface="bold",
+            hjust=-0.1, show.legend = F) + 
+  scale_x_continuous(expand=c(0,0), 
+                     limits = c(1,15.5), breaks = c(1,7,13)) +
+  theme_pubr() +
+  scale_y_continuous(name=short_names_traits[.x]#, expand=c(0,0)
+                     ) + 
+  theme(legend.position="top", legend.title = element_blank(), 
+        legend.key.width = unit(1.25,"cm"),
+        legend.text = element_text(#size=75,
+                                   margin = margin(l=0.5,r = 1, unit = "cm"))
+        )
+}) 
+
+
+
+gt_plots[[3]] = gt_plots[[3]] + scale_x_continuous(expand=c(0,0), 
+                     limits = c(0,15.5), breaks = c(1,7,13)) + 
+  scale_y_continuous(expand=c(0,0)) +
+  
+  ggnewscale::new_scale_fill() +
+  geom_raster(data=
+              #data.frame(x=rep(1:13, 56), y=rep(40:95, 13))
+              data.frame(x=rep(c(0.5), each=27),y=rep(66:92,1))
+            ,
+            aes(x,y, fill=y), show.legend = F) +
+  scale_fill_gradient2(high="#98DF65", mid="#CADE64",
+                       low="#DEBF64", midpoint = 70) 
+
+
+ggarrange(plotlist = gt_plots, common.legend = T)
+
+# ggsave("/Users/quino070/Bellwether_RGB/2025_paper/gen_trends.pdf",
+#        width = 7.5, height=8, units = "in", limitsize = F)
+```
+
+
+
+
+
+
+
+
+Getting similarity metric for every day. Using the formula:
+$$
+%similarity = \frac{mean_treatment}{mean_Control_day13}
+$$
+
+```{r message=FALSE, warning=FALSE}
+summary_df = df_full %>% dplyr::select(1:6, resp_traits) %>% 
+  pivot_longer(cols = resp_traits, names_to = "trait") %>% 
+  group_by(genotype_name, treatment, day, trait) %>% 
+  summarize(mean=mean(value, na.rm=T), 
+            #adding variance calculation and a count of how many replicates for genotype:treatment to make my life easier later
+            var=var(value, na.rm=T), n=n()) %>% 
+  group_by(genotype_name, trait) %>% 
+    mutate(terminal_C = mean[treatment=="Control" & day==13],
+      #similarity metric is being calculated in relation to the value in control at the last day of the experiment
+      similarity = mean/mean[treatment=="Control"])
+```
+
+
+```{r, fig.width=20, fig.height=30}
+# pdf("/Users/quino070/Bellwether_RGB/2025_paper/similarity.pdf", width = 10, height = 12)
+
+ord = summary_df %>% filter(trait=="area_cm2" & treatment=="Drought" & day==13) %>% 
+  arrange(-similarity) %>% .$genotype_name
+
+
+imap(resp_traits, ~{
+  df = summary_df %>% filter(trait==.x & treatment!="Control") %>% 
+    mutate(similarity=ifelse(similarity>1, 1, similarity)) 
+    fill_brks=c(0,0.25,0.50,0.75,1)
+      fill_limits = c(0,1)
+  
+  if(.x=="pWUE"){brks= 2:13} else {brks=1:13}
+  
+  plt = df %>% filter(!is.na(similarity)) %>% 
+  ggplot(aes(as.factor(day), fct_relevel(genotype_name, ord), fill=similarity)) + geom_tile() +
+  facet_wrap(~treatment, nrow=1, labeller = as_labeller(~treat_fullname[.x])) +
+    scale_x_discrete(breaks=brks) +
+    labs(x="Day of Experiment", y=NULL, fill="Similarity") + 
+    #geom_text(aes(label = round(similarity,2) *100), size=7, show.legend = F) +
+    ggtitle(short_names_traits[.x]) + 
+    theme(strip.text.x = element_text(size=15),
+          axis.text=element_text(size=12))
+  
+    plt + scale_fill_distiller(palette = "Spectral", type = "seq",
+                         labels=scales::percent_format(),
+                         direction = +1, 
+                         breaks=fill_brks, 
+                         limits=fill_limits,
+                         guide = guide_colorbar(barheight=20)
+                         )   
+
+
+  #ggsave(paste0("/Users/quino070/Bellwether_RGB/2025_paper/similarity_", .x, ".png"), width=10, height=12)
+  
+  })
+
+# dev.off()
+
+
+```
+
+
+Sources
+```{r}
+library(gtExtras)
+
+a = df_full %>% select(genotype_name, subpopulation) %>% unique() %>% 
+  full_join(.,read.csv("/Users/quino070/Downloads/bellwether_source.csv")) %>% 
+  #modify label for plotting purposes
+  mutate(subpopulation=ifelse(
+    subpopulation=="Temporate/Tropical mix", "Temporate/ \n Tropical mix", 
+    ifelse(subpopulation == "Stiff-stalk", "Stiff stalk",
+           ifelse(subpopulation == "Non-stiff-stalk", "Non-stiff stalk", 
+                  subpopulation))
+    )
+    )
+
+source = a %>% 
+  #mutate(source = factor(source, c("NAM", "WiDiv", "Specialized"))) %>% arrange(source, subpopulation) %>%  
+  rename("Genotype"='genotype_name', 
+             "Subpopulation"="subpopulation", "Main Source"="source") %>% 
+  mutate(Subpopulation=ifelse(Subpopulation=="Temporate/ \n Tropical mix", 
+                              "Temperate/Tropical mix", Subpopulation),
+         `Main Source` = ifelse(`Main Source`=="NAM", "NAM founder", `Main Source`) %>% 
+           factor(., c("NAM founder", "WiDiv", "Specialized"))) %>% 
+  arrange(`Main Source`, Subpopulation) 
+  
+source = gt(source) %>% tab_style(style = cell_text(weight = "bold"), 
+                         locations = cells_column_labels())
+
+#gtsave(source, filename = "/Users/quino070/Bellwether_RGB/2025_paper/germplasm.pdf")
+
+```
+
+
+#Subpopulation differences
+Testing subpopulation as a factor
+
+
+```{r, fig.width=10, fig.height=10}
+library(betareg)
+library(lmtest)
+library(ggtext)
+
+
+spds = 
+df_full %>% select(genotype_name, subpopulation) %>% unique() %>% 
+  left_join(summary_df,.) %>% 
+  filter(day==13 & treatment!="Control" &
+           subpopulation %in% c("Tropical", "Stiff-stalk", "Non-stiff-stalk"))
+
+subpop_resp_plots = spds %>% 
+  ggplot(aes(similarity, subpopulation)) + 
+  geom_density_ridges(aes(fill=subpopulation),
+                      alpha=0.5, show.legend = F, rel_min_height = 0.01,
+                      scale=0.6,
+    jittered_points = TRUE, point_shape=21,
+    point_alpha=1,
+    point_size=2,
+    position = position_points_jitter(width = 0.05, height = 0)
+    ) + 
+  facet_grid(treatment~trait, scales = "free", 
+             labeller = labeller(.cols=~short_names_traits[.x],
+                                 .rows=~treat_fullname[.x]) ) + 
+  scale_fill_brewer(palette = "Spectral") + 
+  scale_color_brewer(palette = "Spectral") + 
+  scale_x_continuous(labels = percent) +
+  labs(y="Subpopulation", x="Similarity to control")
+
+  
+
+
+kwt_subpop = imap(names(treat_fullname)[-1], ~{
+  tr=.x
+  imap(resp_traits, ~{
+    tdf = spds %>% filter(treatment==tr & trait==.x)
+    null = betareg(similarity ~ 1, data= tdf)
+    mod = betareg(similarity ~ subpopulation, data=tdf)
+    data.frame(
+               treatment=tr,trait=.x,
+               chi_squared=round(as.data.frame.list(lrtest(null,mod))[2,4],2), 
+               pval=round(as.data.frame.list(lrtest(null,mod))[2,5],3))
+  }) %>%  do.call("rbind",.)
+}) %>% do.call("rbind",.) %>% 
+  mutate(label=paste0("X² = ",round(chi_squared,2),"; p = ", round(pval,2)))
+
+
+subpop_resp_plots + geom_text(data=kwt_subpop, 
+                              aes(x=Inf, y=Inf, label=label), 
+                              #vjust=1.5,hjust=1.5
+                              vjust=2, hjust=1.5
+                              ) +
+  theme(strip.background = element_rect(fill=NA)) +
+  scale_y_discrete(labels=c("Tropical"="Tropical", "Stiff-stalk"= "Stiff stalk", 
+                            "Non-stiff-stalk"= "Non-stiff stalk"),
+                   expand=expansion(mult=c(0.05,0.4)))
+
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/similarity_by_subpop.pdf")
+
+
+
+```
+
+
+```{r}
+library(emmeans)
+
+betareg(similarity ~ subpopulation, data=
+          spds %>% filter(treatment=="Drought" & trait=="area_cm2")) %>% 
+  emmeans(., pairwise ~ subpopulation)
+  
+
+betareg(similarity ~ subpopulation, data=
+          spds %>% filter(treatment=="Drought" & trait=="height_above_reference_cm")) %>% 
+  emmeans(., pairwise ~ subpopulation)
+
+```
+
+Leaf count analysis by genotype :)
+
+
+```{r message=FALSE, fig.height=10}
+library(dunn.test)
+
+leaf_counts_by_gen = df_full %>% select(1:6, leaf_count) %>% filter(day==13) %>% group_by(genotype_name) %>% 
+  group_map(.keep = T,~{
+   dt = dunn.test(.x$leaf_count, .x$treatment, method="bonferroni")
+   dtr = data.frame(genotype_name=unique(.x$genotype_name),treatment=dt$comparisons, pval=dt$P.adjusted) %>%
+     filter(startsWith(treatment,"Control")) %>%
+     mutate(sig=ifelse(pval<0.05, "*", ""), treatment=sub('.*- ', '', treatment))
+  }) %>% do.call("rbind",.) %>% 
+  full_join(., df_full %>% filter(day==13) %>% 
+              group_by(genotype_name, treatment) %>% 
+              summarize(leaf_count=median(leaf_count, na.rm=T) %>% as.integer()))
+
+lcor = leaf_counts_by_gen %>% filter(treatment=="Drought") %>% 
+  arrange(-leaf_count) %>% .$genotype_name
+
+ggplot(leaf_counts_by_gen, 
+       aes(treatment, fct_relevel(genotype_name, ord), 
+           fill=as.factor(leaf_count), label=sig)) + 
+  geom_tile(color="darkgrey") + geom_text() + 
+  scale_x_discrete(expand=c(0,0), labels=~treat_fullname[.x]) +
+  scale_fill_brewer(palette = "Greens", direction = +1) +
+  labs(fill="Leaf count", y=NULL, x=NULL)  
+
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/leaf_counts_dunntest.pdf", height=12, width = 6)
+```
+
+# Multiplicative risk model:
+
+First, calculate expected additive effect of D + H as
+
+$$
+ExpectedDH = D_{red} + H_{red} =  (D_{red} + H_{red}) - (D_{red} * H_{red})
+$$
+
+Then, calculate variance of the expected additive effect:
+$$
+var_{Expected_{D+H}} = var(D_{red}) * (1-H_{red})^2 + var(H_{red})*(1-D_{red})^2 
+$$
+Now use the expected variance to calculate a 95% confidence interval:
+$$
+95\%CI_{D+H} = 2.228*\sqrt{var_{Expected_{D+H}}/n}
+$$
+If confidence intervals overlap = additive
+If Observed - Expected > 0, and CIs do not overlap = synergistic
+If Observed - Expected < 0,and CI do not overlap = antagonistic
+
+
+First, running anova + pairwise comparisons to get the effect of each treatment for all genotypes at each trait
+
+```{r}
+comp_means_df = imap(resp_traits, ~{
+  #this first imap loop goes through all the traits
+  tr = .x
+  all_gens = imap(unique(df_full$genotype_name), ~{
+    gen = .x
+    #this second one loops through all the genotypes
+    sub_df = df_full %>% filter(day==13 & genotype_name==gen)
+    an = aov(eval(parse(text=tr)) ~ treatment, sub_df)
+    #This dataframe contains the reductions caused by each treatment, compared to control
+    tuk = 
+      TukeyHSD(an) %>% .$treatment %>% as.data.frame() %>% 
+      rownames_to_column("contrast") %>% rowwise() %>% 
+      mutate(
+        treatment=str_split(contrast, "-") %>% unlist() %>% .[[1]],
+             t2=str_split(contrast, "-") %>% unlist() %>% .[[2]]
+        ) %>% 
+      filter(t2 =="Control") %>% rename("reduction"="diff", "pval"="p adj") %>% 
+      dplyr::select(-c(contrast, t2)) %>% ungroup()
+    
+    sig_test = cbind(trait=tr, genotype_name=gen, tuk)
+    
+    return(sig_test)
+  }) %>% do.call("rbind",.)
+}) %>% do.call("rbind",.) %>% 
+  #merge with summary dataset
+  left_join(summary_df %>% filter(day==13),.) %>% group_by(genotype_name, trait) %>% 
+  mutate(
+    #calculating the effect as the reduction caused by the treatment over the value in control
+    effect = abs(reduction/terminal_C)
+    )
+```
+
+
+Now, I will be calculating a variance based on the percent reduction calculated for each genotype, so both the observed and expected reductions will be made off 47 datapoints.
+
+
+
+
+
+Running model by genotype
+```{r}
+effects_by_gen = comp_means_df %>% 
+  mutate(
+  #Step 1: calculate effect (mean reduction) and variance of effect (variance of reduction)
+  #first part was already done, now calculate variance of effect - using the delta method as per Darling et al 2010.
+  var_effect = var*(1/terminal_C)^2 + var[treatment=="Control"]*
+    (-mean/terminal_C^2)^2
+  ) %>% filter(treatment != "Control")
+
+effects_by_gen = effects_by_gen %>% 
+  summarize(
+    #Step 2: calculate additive null expectation
+    #calculate expected DH effect
+    expectedDH_effect = 
+      effect[treatment=="Drought"] + effect[treatment=="Heat"] -
+    (effect[treatment=="Drought"]*effect[treatment=="Heat"]),
+    #calculate expected DH effect variance - once again following methods by Darling et al 2010
+    expectedDH_var_effect =
+      var_effect[treatment=="Drought"] * (1-effect[treatment=="Heat"])^2 +
+      var_effect[treatment=="Heat"]*(1-effect[treatment=="Drought"])^2,
+    #sum of observations in each subset to calculate CI later
+    n = n[treatment=="Drought"] + n[treatment=="Heat"]) %>% 
+  pivot_longer(cols=3:4, names_to=c("treatment", ".value"), names_sep="_") %>%
+  rename("var_effect"="var") %>% 
+  rbind(effects_by_gen %>% select(1:2, 4, effect, var_effect, n), .) %>% 
+  mutate(CI=2.228*sqrt(var_effect/n), max=effect+CI,min=effect-CI)
+
+```
+
+Hypothesis test by genotype
+```{r, fig.height=15}
+hyp_test_by_gen = effects_by_gen %>% filter(treatment%in%c("Drought_Heat", "expectedDH")) %>% 
+  summarize(hypothesis_effect=
+              #Hypothesis: Observed combined effect and expected combined effect are similar
+              effect[treatment=="Drought_Heat"]-effect[treatment=="expectedDH"],
+            #Getting confidence interval of observed-expected
+            min=min[treatment=="Drought_Heat"]-min[treatment=="expectedDH"],
+            max=max[treatment=="Drought_Heat"]-max[treatment=="expectedDH"],
+            #Color-coding based on results
+            col=ifelse(
+              #if CIs overlap, effect = additive, color=white
+              min*max<=0, "Additive", 
+              #if observed < expected = antagonistic
+              ifelse(max<0, "Antagonistic", 
+              #if observed > expected = synergistic
+              "Synergistic"))) %>% mutate(col=fct_relevel(col,c("Antagonistic","Additive", "Synergistic")))
+
+```
+
+```{r}
+hyp_test_by_gen %>% 
+  ggplot(aes(trait,hypothesis_effect)) + 
+  geom_violin(draw_quantiles = 0.5#, linewidth=2
+              ) + 
+  # geom_pointrange(aes(group=genotype_name,fill=col, ymin=min, ymax=max), 
+  #                 shape=23, linetype="dashed", size=2, alpha=0.8,
+  #                 position=position_jitter()
+  #                 ) + 
+  ggbeeswarm::geom_quasirandom(
+    #shape=23, 
+    size=3,
+    aes(fill=col,
+                shape=col)) +
+  
+  theme_pubr() + 
+   scale_y_continuous(labels=scales::percent,
+                     name="Observed - Expected \n Drought & Heat effect size") +
+  scale_x_discrete(labels=~short_names_traits[.x], name=NULL) + 
+  scale_fill_manual(values=c("Antagonistic"="#2A73AD","Additive"="white", "Synergistic"="#D98F07"),name="Effect") +
+  scale_shape_manual(values=c("Antagonistic"=22,"Additive"=21, "Synergistic"=23),
+                     name="Effect") + 
+  geom_hline(yintercept=0, linetype="dashed", color="red"#, size=1.5
+             ) 
+
+# +
+#   theme(
+#     axis.title = element_text(size=80),
+#     legend.title = element_text(size=80),
+#     legend.text = element_text(size=80),
+#     axis.text = element_text(size=70),
+#     legend.key.size = unit(6,"line"),
+#     legend.spacing = unit(3,"cm")
+#   )
+  
+
+
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/effect_by_trait.pdf", bg="transparent", height = 10)
+
+```
+
+
+```{r}
+imap(resp_traits, ~{
+  pt = summary_df %>% mutate(gen_cat = ifelse(
+  genotype_name %in% c("CML333", "M162W", "Tzi8"), "Antagonistic", 
+  ifelse(genotype_name %in% c("CML228", "CML322", "CML52","LH197"), 
+         "Synergistic","Other"))) %>% 
+    filter(day==13 & treatment!="Control" & gen_cat=="Antagonistic" & trait==.x) %>% 
+    ggplot(aes(treatment, similarity)) + geom_point(color="darkgrey") + 
+    geom_boxplot(color="#2A73AD", fill=NA
+      ) +
+    geom_line(aes(group=genotype_name), color="grey", linetype="dashed") + 
+    facet_wrap(~trait, labeller = as_labeller(~short_names_traits[.x]), scales = "free") + 
+    stat_compare_means(x="treatment", y="similarity", 
+                                     facet.by="gen_cat", 
+                                     comparisons = list(c("Drought", "Drought_Heat"),
+                                          c("Drought_Heat","Heat"),
+                                          c("Drought", "Heat")), method = "t.test",
+                       aes(label = after_stat(p.signif))) +
+  labs(x=NULL, y="Similarity to control") + scale_x_discrete(labels=treat_fullname) +
+  theme_pubr() +
+  theme(strip.background = element_rect(fill=NA), strip.text = element_text(size=12))
+  
+  pt = pt + scale_y_continuous(labels = scales::percent_format(), n.breaks = 4)
+  
+})   %>% ggarrange(plotlist = .)
+  
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/ant_trends.pdf", height = 12, width = 10)
+  
+
+
+imap(resp_traits, ~{
+  pt = summary_df %>% mutate(gen_cat = ifelse(
+  genotype_name %in% c("CML333", "M162W", "Tzi8"), "Antagonistic", 
+  ifelse(genotype_name %in% c("CML228", "CML322", "CML52","LH197"), 
+         "Synergistic","Other"))) %>% 
+    filter(day==13 & treatment!="Control" & gen_cat=="Synergistic" & trait==.x) %>% 
+    ggplot(aes(treatment, similarity)) + geom_point(color="darkgrey") + 
+    geom_boxplot(color="#D98F07", fill=NA
+      ) +
+    geom_line(aes(group=genotype_name), color="grey", linetype="dashed") + 
+    facet_wrap(~trait, labeller = as_labeller(~short_names_traits[.x]), scales = "free") + 
+    stat_compare_means(x="treatment", y="similarity", 
+                                     facet.by="gen_cat", 
+                                     comparisons = list(c("Drought", "Drought_Heat"),
+                                          c("Drought_Heat","Heat"),
+                                          c("Drought", "Heat")), method = "t.test",
+                       aes(label = after_stat(p.signif))) +
+  labs(x=NULL, y="Similarity to control") + scale_x_discrete(labels=treat_fullname) +
+  theme_pubr() +
+  theme(strip.background = element_rect(fill=NA), strip.text = element_text(size=12))
+  
+  pt = pt + scale_y_continuous(labels = scales::percent_format(), n.breaks = 4)
+  
+})   %>% ggarrange(plotlist = .)
+  
+#ggsave("/Users/quino070/Bellwether_RGB/2025_paper/syn_trends.pdf", height = 12, width = 10)
+
+```
