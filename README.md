@@ -2,6 +2,9 @@
 
 The repository contains the code used in the publication REFERENCE HERE. 
 
+# Raw Image Data
+Raw Image data is available at BioImage Archive: https://www.ebi.ac.uk/biostudies/bioimages/studies/S-BIAD2511
+
 # file descriptions
 
 bell_side_maize_07232022.ipynb - This jupyter notebook is used for testing and developing the PlantCV workflow used for RGB analysis of side-view images captured on the Bellwether Phenotyping Platform. 
